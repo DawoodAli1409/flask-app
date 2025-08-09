@@ -14,20 +14,40 @@ from io import BytesIO
 from PIL import Image
 import requests
 import fnmatch
+import sys
 
 # Initialize Flask app
 app = Flask(__name__)
 
-# Initialize Firestore and Storage clients
-db = firestore.Client(database='dawood')
-storage_client = storage.Client()
-bucket = storage_client.bucket('internship-2025-465209.firebasestorage.app')
-
+# Add startup logging
 def log_with_timestamp(message):
     """Log message with timestamp in Pakistan time"""
     now = datetime.now()
     formatted_time = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " PKT"
-    print(f"{formatted_time} | {message}")
+    print(f"{formatted_time} | {message}", flush=True)
+
+# Log startup information
+log_with_timestamp("🐳 Starting Flask application in Docker container")
+log_with_timestamp(f"🐍 Python version: {sys.version}")
+log_with_timestamp(f"📁 Working directory: {os.getcwd()}")
+log_with_timestamp(f"🔧 Environment PORT: {os.environ.get('PORT', 'Not set')}")
+
+# Initialize Firestore and Storage clients with error handling
+try:
+    db = firestore.Client(database='dawood')
+    log_with_timestamp("✅ Firestore client initialized successfully")
+except Exception as e:
+    log_with_timestamp(f"❌ Error initializing Firestore: {str(e)}")
+    db = None
+
+try:
+    storage_client = storage.Client()
+    bucket = storage_client.bucket('internship-2025-465209.firebasestorage.app')
+    log_with_timestamp("✅ Storage client initialized successfully")
+except Exception as e:
+    log_with_timestamp(f"❌ Error initializing Storage: {str(e)}")
+    storage_client = None
+    bucket = None
 
 def sanitize_filename_for_storage(email):
     """Convert email to storage-safe filename"""
@@ -43,103 +63,114 @@ def clean_filename(filename):
 
 def get_student_image_path(student_name):
     """Find correct storage path for student images with comprehensive matching"""
-    if not student_name:
+    if not student_name or not bucket:
         return None
     
-    clean_name = student_name.lower().replace(' ', '_')
-    name_parts = student_name.split()
-    first_name = name_parts[0].lower() if name_parts else ''
-    last_name = name_parts[-1].lower() if len(name_parts) > 1 else ''
-    
-    blobs = list(storage_client.list_blobs(bucket, prefix="students/"))
-    
-    patterns_to_try = [
-        f"*{clean_name}*",
-        f"*{first_name}_{last_name}*" if last_name else "",
-        f"*{first_name}*",
-        f"*{first_name}*{last_name}*" if last_name else "",
-        f"*{last_name}*{first_name}*" if last_name else "",
-        f"*{first_name}*",
-        f"*{re.sub(r'[^a-z]', '', first_name)}*",
-        f"*{re.sub(r'[^a-z]', '', clean_name)}*"
-    ]
-    
-    patterns_to_try = [p for p in patterns_to_try if p]
-    
-    for pattern in patterns_to_try:
-        for blob in blobs:
-            filename = blob.name.lower().split('/')[-1]
-            if fnmatch.fnmatch(filename, pattern):
-                log_with_timestamp(f"✅ Found match for {student_name}: {blob.name}")
-                return blob.name
-    
-    log_with_timestamp(f"⚠️ No image found for student: {student_name}")
-    return None
+    try:
+        clean_name = student_name.lower().replace(' ', '_')
+        name_parts = student_name.split()
+        first_name = name_parts[0].lower() if name_parts else ''
+        last_name = name_parts[-1].lower() if len(name_parts) > 1 else ''
+        
+        blobs = list(storage_client.list_blobs(bucket, prefix="students/"))
+        
+        patterns_to_try = [
+            f"*{clean_name}*",
+            f"*{first_name}_{last_name}*" if last_name else "",
+            f"*{first_name}*",
+            f"*{first_name}*{last_name}*" if last_name else "",
+            f"*{last_name}*{first_name}*" if last_name else "",
+            f"*{first_name}*",
+            f"*{re.sub(r'[^a-z]', '', first_name)}*",
+            f"*{re.sub(r'[^a-z]', '', clean_name)}*"
+        ]
+        
+        patterns_to_try = [p for p in patterns_to_try if p]
+        
+        for pattern in patterns_to_try:
+            for blob in blobs:
+                filename = blob.name.lower().split('/')[-1]
+                if fnmatch.fnmatch(filename, pattern):
+                    log_with_timestamp(f"✅ Found match for {student_name}: {blob.name}")
+                    return blob.name
+        
+        log_with_timestamp(f"⚠️ No image found for student: {student_name}")
+        return None
+    except Exception as e:
+        log_with_timestamp(f"❌ Error finding student image for {student_name}: {str(e)}")
+        return None
 
 def get_project_image(project_data):
     """Find project image with multiple fallback patterns"""
-    project_id = project_data.get('id', 'unknown')
-    project_title = clean_filename(project_data.get('title', 'unknown'))
-    original_title = project_data.get('title', 'unknown')
-    
-    if project_data.get('imageUrl'):
-        try:
-            image_path = project_data['imageUrl'].split('/o/')[-1].split('?')[0]
-            image_path = image_path.replace('%2F', '/').replace('%20', ' ')
-            log_with_timestamp(f"🔄 Trying imageUrl path: {image_path}")
-            image_stream = download_image_from_storage(image_path)
-            if image_stream:
-                return image_stream
-            
-            decoded_path = requests.utils.unquote(image_path)
-            if decoded_path != image_path:
-                log_with_timestamp(f"🔄 Trying decoded path: {decoded_path}")
-                image_stream = download_image_from_storage(decoded_path)
+    if not bucket:
+        return None
+        
+    try:
+        project_id = project_data.get('id', 'unknown')
+        project_title = clean_filename(project_data.get('title', 'unknown'))
+        original_title = project_data.get('title', 'unknown')
+        
+        if project_data.get('imageUrl'):
+            try:
+                image_path = project_data['imageUrl'].split('/o/')[-1].split('?')[0]
+                image_path = image_path.replace('%2F', '/').replace('%20', ' ')
+                log_with_timestamp(f"🔄 Trying imageUrl path: {image_path}")
+                image_stream = download_image_from_storage(image_path)
                 if image_stream:
                     return image_stream
-        except Exception as e:
-            log_with_timestamp(f"⚠️ Error processing image URL: {str(e)}")
-
-    patterns_to_try = [
-        f"projects/{project_id}.jpg",
-        f"projects/{project_id}.png",
-        f"projects/project_{project_id}.jpg",
-        f"projects/project_{project_id}.png",
-        f"projects/{project_title}.jpg",
-        f"projects/{project_title}.png",
-        f"projects/{original_title}.jpg",
-        f"projects/{original_title}.png",
-        f"projects/*{project_title[:10]}*.jpg",
-        f"projects/*{project_title[:10]}*.png",
-        f"projects/dec cap vale.png",
-        f"projects/IOTbasedRealTimeApp.jpg",
-        f"projects/Scratch.png"
-    ]
-
-    for pattern in patterns_to_try:
-        if '*' in pattern:
-            blobs = list(storage_client.list_blobs(bucket, prefix="projects/"))
-            for blob in blobs:
-                if fnmatch.fnmatch(blob.name, pattern):
-                    log_with_timestamp(f"🔄 Trying wildcard pattern: {blob.name}")
-                    image_stream = download_image_from_storage(blob.name)
+                
+                decoded_path = requests.utils.unquote(image_path)
+                if decoded_path != image_path:
+                    log_with_timestamp(f"🔄 Trying decoded path: {decoded_path}")
+                    image_stream = download_image_from_storage(decoded_path)
                     if image_stream:
                         return image_stream
-        else:
-            log_with_timestamp(f"🔄 Trying direct path: {pattern}")
-            image_stream = download_image_from_storage(pattern)
-            if image_stream:
-                return image_stream
+            except Exception as e:
+                log_with_timestamp(f"⚠️ Error processing image URL: {str(e)}")
 
-    log_with_timestamp(f"⚠️ No image found for project {project_id} ({project_title})")
-    return download_image_from_storage("projects/default_project.jpg")
+        patterns_to_try = [
+            f"projects/{project_id}.jpg",
+            f"projects/{project_id}.png",
+            f"projects/project_{project_id}.jpg",
+            f"projects/project_{project_id}.png",
+            f"projects/{project_title}.jpg",
+            f"projects/{project_title}.png",
+            f"projects/{original_title}.jpg",
+            f"projects/{original_title}.png",
+            f"projects/*{project_title[:10]}*.jpg",
+            f"projects/*{project_title[:10]}*.png",
+            f"projects/dec cap vale.png",
+            f"projects/IOTbasedRealTimeApp.jpg",
+            f"projects/Scratch.png"
+        ]
+
+        for pattern in patterns_to_try:
+            if '*' in pattern:
+                blobs = list(storage_client.list_blobs(bucket, prefix="projects/"))
+                for blob in blobs:
+                    if fnmatch.fnmatch(blob.name, pattern):
+                        log_with_timestamp(f"🔄 Trying wildcard pattern: {blob.name}")
+                        image_stream = download_image_from_storage(blob.name)
+                        if image_stream:
+                            return image_stream
+            else:
+                log_with_timestamp(f"🔄 Trying direct path: {pattern}")
+                image_stream = download_image_from_storage(pattern)
+                if image_stream:
+                    return image_stream
+
+        log_with_timestamp(f"⚠️ No image found for project {project_id} ({project_title})")
+        return download_image_from_storage("projects/default_project.jpg")
+    except Exception as e:
+        log_with_timestamp(f"❌ Error getting project image: {str(e)}")
+        return None
 
 def download_image_from_storage(image_path):
     """Download image from Firebase Storage"""
+    if not bucket or not image_path:
+        return None
+        
     try:
-        if not image_path:
-            return None
-            
         blob = bucket.blob(image_path)
         if not blob.exists():
             log_with_timestamp(f"⚠️ Image not found: {image_path}")
@@ -194,7 +225,7 @@ def format_timestamp(timestamp):
 
 def fetch_supervisor_name(supervisor_id):
     """Fetch supervisor name from Firestore"""
-    if not supervisor_id:
+    if not supervisor_id or not db:
         return "N/A"
     try:
         supervisor_doc = db.collection('Teacher').document(supervisor_id).get()
@@ -284,163 +315,180 @@ def add_individual_member_details(doc, students_data):
 
 def create_professional_docx(projects_data):
     """Create a professional DOCX document with all projects"""
-    doc = Document()
-    style = doc.styles['Normal']
-    font = style.font
-    font.name = 'Arial'
-    font.size = Pt(11)
+    log_with_timestamp("📄 Creating professional DOCX document")
     
-    # Cover page
-    title = doc.add_paragraph()
-    title_run = title.add_run('PROJECT PORTFOLIO REPORT')
-    title_run.font.size = Pt(24)
-    title_run.font.bold = True
-    title_run.font.color.rgb = RGBColor(31, 78, 121)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    subtitle = doc.add_paragraph()
-    subtitle_run = subtitle.add_run(f'Generated on {datetime.now().strftime("%B %d, %Y")}')
-    subtitle_run.font.size = Pt(14)
-    subtitle_run.font.italic = True
-    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    count_para = doc.add_paragraph()
-    count_run = count_para.add_run(f'Total Projects: {len(projects_data)}')
-    count_run.font.size = Pt(12)
-    count_run.font.bold = True
-    count_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    doc.add_page_break()
-    
-    # Process each project
-    for idx, project_data in enumerate(projects_data):
-        log_with_timestamp(f"📄 Processing project {idx + 1}/{len(projects_data)}: {project_data.get('title', 'Untitled')}")
+    try:
+        doc = Document()
+        style = doc.styles['Normal']
+        font = style.font
+        font.name = 'Arial'
+        font.size = Pt(11)
         
-        # Project title
-        project_title = doc.add_paragraph()
-        title_run = project_title.add_run(f"Project {idx + 1}: {project_data.get('title', 'Untitled Project')}")
-        title_run.font.size = Pt(18)
+        # Cover page
+        title = doc.add_paragraph()
+        title_run = title.add_run('PROJECT PORTFOLIO REPORT')
+        title_run.font.size = Pt(24)
         title_run.font.bold = True
         title_run.font.color.rgb = RGBColor(31, 78, 121)
-        project_title.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        # Project overview
-        overview_heading = doc.add_paragraph()
-        overview_run = overview_heading.add_run('Project Overview')
-        overview_run.font.size = Pt(14)
-        overview_run.font.bold = True
-        overview_run.font.color.rgb = RGBColor(68, 114, 196)
+        subtitle = doc.add_paragraph()
+        subtitle_run = subtitle.add_run(f'Generated on {datetime.now().strftime("%B %d, %Y")}')
+        subtitle_run.font.size = Pt(14)
+        subtitle_run.font.italic = True
+        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        details = [
-            ("Description", project_data.get('description', 'No description available')),
-            ("Supervisor", project_data.get('supervisor_name', 'N/A')),
-            ("Co-Supervisor", project_data.get('co_supervisor_name', 'N/A'))
-        ]
+        # Add Docker info
+        docker_info = doc.add_paragraph()
+        docker_run = docker_info.add_run('🐳 Generated using Docker Container')
+        docker_run.font.size = Pt(12)
+        docker_run.font.bold = True
+        docker_info.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        for label, value in details:
-            para = doc.add_paragraph()
-            label_run = para.add_run(f"{label}: ")
-            label_run.font.bold = True
-            value_run = para.add_run(value)
-            value_run.font.size = Pt(11)
+        count_para = doc.add_paragraph()
+        count_run = count_para.add_run(f'Total Projects: {len(projects_data)}')
+        count_run.font.size = Pt(12)
+        count_run.font.bold = True
+        count_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        # Timestamps
-        timestamps_heading = doc.add_paragraph()
-        timestamps_run = timestamps_heading.add_run('Timestamps')
-        timestamps_run.font.size = Pt(14)
-        timestamps_run.font.bold = True
-        timestamps_run.font.color.rgb = RGBColor(68, 114, 196)
+        doc.add_page_break()
         
-        created_at = format_timestamp(project_data.get('createdAt'))
-        if created_at != "N/A":
-            para = doc.add_paragraph()
-            label_run = para.add_run("Created At: ")
-            label_run.font.bold = True
-            value_run = para.add_run(created_at)
-            value_run.font.size = Pt(11)
-        
-        # Project image
-        image_stream = get_project_image(project_data)
-        
-        if image_stream:
-            try:
-                width, height = resize_image_for_docx(image_stream, max_width=4, max_height=3)
-                image_stream.seek(0)
-                
-                img_para = doc.add_paragraph()
-                img_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                run = img_para.add_run()
-                run.add_picture(image_stream, width=width, height=height)
-                
-                caption = doc.add_paragraph()
-                caption_run = caption.add_run(f"Figure {idx + 1}: {project_data.get('title', 'Project Image')}")
-                caption_run.font.size = Pt(10)
-                caption_run.font.italic = True
-                caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            except Exception as e:
-                log_with_timestamp(f"❌ Error adding project image: {str(e)}")
-        
-        # Team members
-        students_data = project_data.get('students', [])
-        
-        # Add table view
-        add_professional_table(doc, students_data, "Team Members")
-        
-        # Add individual member details
-        team_members_heading = doc.add_paragraph()
-        team_members_run = team_members_heading.add_run('Team Members Details')
-        team_members_run.font.size = Pt(14)
-        team_members_run.font.bold = True
-        team_members_run.font.color.rgb = RGBColor(68, 114, 196)
-        
-        add_individual_member_details(doc, students_data)
-        
-        # Team photos
-        if students_data:
-            photos_title = doc.add_paragraph()
-            photos_run = photos_title.add_run('Team Photos')
-            photos_run.font.size = Pt(14)
-            photos_run.font.bold = True
-            photos_run.font.color.rgb = RGBColor(68, 114, 196)
+        # Process each project
+        for idx, project_data in enumerate(projects_data):
+            log_with_timestamp(f"📄 Processing project {idx + 1}/{len(projects_data)}: {project_data.get('title', 'Untitled')}")
             
-            photos_per_row = 3
-            current_row_para = None
+            # Project title
+            project_title = doc.add_paragraph()
+            title_run = project_title.add_run(f"Project {idx + 1}: {project_data.get('title', 'Untitled Project')}")
+            title_run.font.size = Pt(18)
+            title_run.font.bold = True
+            title_run.font.color.rgb = RGBColor(31, 78, 121)
+            project_title.alignment = WD_ALIGN_PARAGRAPH.LEFT
             
-            for i, student in enumerate(students_data):
-                if i % photos_per_row == 0:
-                    if current_row_para:
-                        doc.add_paragraph()
-                    current_row_para = doc.add_paragraph()
-                    current_row_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            # Project overview
+            overview_heading = doc.add_paragraph()
+            overview_run = overview_heading.add_run('Project Overview')
+            overview_run.font.size = Pt(14)
+            overview_run.font.bold = True
+            overview_run.font.color.rgb = RGBColor(68, 114, 196)
+            
+            details = [
+                ("Description", project_data.get('description', 'No description available')),
+                ("Supervisor", project_data.get('supervisor_name', 'N/A')),
+                ("Co-Supervisor", project_data.get('co_supervisor_name', 'N/A'))
+            ]
+            
+            for label, value in details:
+                para = doc.add_paragraph()
+                label_run = para.add_run(f"{label}: ")
+                label_run.font.bold = True
+                value_run = para.add_run(value)
+                value_run.font.size = Pt(11)
+            
+            # Timestamps
+            timestamps_heading = doc.add_paragraph()
+            timestamps_run = timestamps_heading.add_run('Timestamps')
+            timestamps_run.font.size = Pt(14)
+            timestamps_run.font.bold = True
+            timestamps_run.font.color.rgb = RGBColor(68, 114, 196)
+            
+            created_at = format_timestamp(project_data.get('createdAt'))
+            if created_at != "N/A":
+                para = doc.add_paragraph()
+                label_run = para.add_run("Created At: ")
+                label_run.font.bold = True
+                value_run = para.add_run(created_at)
+                value_run.font.size = Pt(11)
+            
+            # Project image
+            image_stream = get_project_image(project_data)
+            
+            if image_stream:
+                try:
+                    width, height = resize_image_for_docx(image_stream, max_width=4, max_height=3)
+                    image_stream.seek(0)
+                    
+                    img_para = doc.add_paragraph()
+                    img_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    run = img_para.add_run()
+                    run.add_picture(image_stream, width=width, height=height)
+                    
+                    caption = doc.add_paragraph()
+                    caption_run = caption.add_run(f"Figure {idx + 1}: {project_data.get('title', 'Project Image')}")
+                    caption_run.font.size = Pt(10)
+                    caption_run.font.italic = True
+                    caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                except Exception as e:
+                    log_with_timestamp(f"❌ Error adding project image: {str(e)}")
+            
+            # Team members
+            students_data = project_data.get('students', [])
+            
+            # Add table view
+            add_professional_table(doc, students_data, "Team Members")
+            
+            # Add individual member details
+            team_members_heading = doc.add_paragraph()
+            team_members_run = team_members_heading.add_run('Team Members Details')
+            team_members_run.font.size = Pt(14)
+            team_members_run.font.bold = True
+            team_members_run.font.color.rgb = RGBColor(68, 114, 196)
+            
+            add_individual_member_details(doc, students_data)
+            
+            # Team photos
+            if students_data:
+                photos_title = doc.add_paragraph()
+                photos_run = photos_title.add_run('Team Photos')
+                photos_run.font.size = Pt(14)
+                photos_run.font.bold = True
+                photos_run.font.color.rgb = RGBColor(68, 114, 196)
                 
-                student_name = student.get('name', 'Unknown')
-                student_email = student.get('email', '')
+                photos_per_row = 3
+                current_row_para = None
                 
-                # Get the correct image path
-                image_path = get_student_image_path(student_name)
-                image_stream = download_image_from_storage(image_path) if image_path else None
-                
-                if image_stream:
-                    try:
-                        width, height = resize_image_for_docx(image_stream)
-                        image_stream.seek(0)
-                        run = current_row_para.add_run()
-                        run.add_picture(image_stream, width=width, height=height)
-                        run.add_text(f" {student_name} ")
-                    except Exception as e:
-                        log_with_timestamp(f"❌ Error adding photo for {student_name}: {str(e)}")
-                        current_row_para.add_run(f"[Photo: {student_name}] ")
-                else:
-                    current_row_para.add_run(f"[{student_name}] ")
+                for i, student in enumerate(students_data):
+                    if i % photos_per_row == 0:
+                        if current_row_para:
+                            doc.add_paragraph()
+                        current_row_para = doc.add_paragraph()
+                        current_row_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    
+                    student_name = student.get('name', 'Unknown')
+                    student_email = student.get('email', '')
+                    
+                    # Get the correct image path
+                    image_path = get_student_image_path(student_name)
+                    image_stream = download_image_from_storage(image_path) if image_path else None
+                    
+                    if image_stream:
+                        try:
+                            width, height = resize_image_for_docx(image_stream)
+                            image_stream.seek(0)
+                            run = current_row_para.add_run()
+                            run.add_picture(image_stream, width=width, height=height)
+                            run.add_text(f" {student_name} ")
+                        except Exception as e:
+                            log_with_timestamp(f"❌ Error adding photo for {student_name}: {str(e)}")
+                            current_row_para.add_run(f"[Photo: {student_name}] ")
+                    else:
+                        current_row_para.add_run(f"[{student_name}] ")
+            
+            # Only add page break if not the last project
+            if idx < len(projects_data) - 1:
+                doc.add_page_break()
         
-        # Only add page break if not the last project
-        if idx < len(projects_data) - 1:
-            doc.add_page_break()
-    
-    return doc
+        log_with_timestamp("✅ DOCX document created successfully")
+        return doc
+    except Exception as e:
+        log_with_timestamp(f"❌ Error creating DOCX document: {str(e)}")
+        raise e
 
 def fetch_all_projects(status_filter=None, limit=None):
     """Fetch all projects from Firestore with robust student data handling"""
+    if not db:
+        raise Exception("Firestore client not initialized")
+        
     try:
         log_with_timestamp(f"🔍 Fetching projects from database")
         
@@ -511,26 +559,39 @@ def fetch_all_projects(status_filter=None, limit=None):
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
+    log_with_timestamp("🏥 Health check requested")
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'service': 'DOCX Generator API',
         'database': 'dawood',
-        'bucket': 'internship-2025-465209.firebasestorage.app'
+        'bucket': 'internship-2025-465209.firebasestorage.app',
+        'docker': os.path.exists('/.dockerenv'),
+        'python_version': sys.version,
+        'working_directory': os.getcwd()
     })
 
 @app.route('/test-firestore', methods=['GET'])
 def test_firestore():
     """Test Firestore connection"""
+    log_with_timestamp("🧪 Testing Firestore connection")
     try:
-        docs = db.collection('projects').limit(1).stream()
+        if not db:
+            return jsonify({
+                'success': False,
+                'message': 'Firestore client not initialized',
+                'database': 'dawood'
+            }), 500
+            
+        docs = list(db.collection('projects').limit(1).stream())
         return jsonify({
             'success': True,
             'message': 'Firestore connection successful',
             'database': 'dawood',
-            'sample_doc_count': len(list(docs))
+            'sample_doc_count': len(docs)
         })
     except Exception as e:
+        log_with_timestamp(f"❌ Firestore test failed: {str(e)}")
         return jsonify({
             'success': False,
             'message': f'Firestore connection failed: {str(e)}',
@@ -547,6 +608,7 @@ def generate_docx():
             return jsonify({
                 'service': 'DOCX Generator API',
                 'status': 'running',
+                'docker': os.path.exists('/.dockerenv'),
                 'endpoints': {
                     'POST /': 'Generate DOCX for all projects',
                     'GET /health': 'Health check',
@@ -555,10 +617,19 @@ def generate_docx():
             })
         
         elif request.method == 'POST':
+            log_with_timestamp("🚀 Starting DOCX generation process")
+            
+            if not db or not bucket:
+                return jsonify({
+                    'success': False,
+                    'message': 'Database or storage client not properly initialized'
+                }), 500
+            
             request_data = request.get_json() or {}
             status_filter = request_data.get('status')
             limit = request_data.get('limit', 100)
             
+            log_with_timestamp(f"📊 Fetching projects with filter: {status_filter}, limit: {limit}")
             projects_data = fetch_all_projects(status_filter=status_filter, limit=limit)
             
             if not projects_data:
@@ -567,31 +638,51 @@ def generate_docx():
                     'message': 'No projects found with the specified criteria'
                 }), 404
             
+            log_with_timestamp(f"📝 Creating DOCX for {len(projects_data)} projects")
             doc = create_professional_docx(projects_data)
             
+            # Save to temporary file
             with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_file:
+                log_with_timestamp(f"💾 Saving DOCX to temporary file: {tmp_file.name}")
                 doc.save(tmp_file.name)
                 tmp_file_path = tmp_file.name
             
+            # Upload to Firebase Storage
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'All_Projects_Report_{timestamp}.docx'
             storage_path = f'documents/{filename}'
             
+            log_with_timestamp(f"☁️ Uploading to Firebase Storage: {storage_path}")
             blob = bucket.blob(storage_path)
+            
             with open(tmp_file_path, 'rb') as file_data:
-                blob.upload_from_file(file_data, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                blob.upload_from_file(
+                    file_data, 
+                    content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                )
             
             blob.make_public()
             download_url = blob.public_url
+            
+            # Clean up temporary file
             os.unlink(tmp_file_path)
+            log_with_timestamp(f"🧹 Cleaned up temporary file")
+            
+            log_with_timestamp(f"✅ DOCX generation completed successfully")
             
             return jsonify({
                 'success': True,
-                'message': f'Successfully generated report for {len(projects_data)} projects',
+                'message': f'Successfully generated report for {len(projects_data)} projects using Docker',
                 'download_url': download_url,
                 'filename': filename,
                 'projects_count': len(projects_data),
                 'generated_at': datetime.now().isoformat(),
+                'generated_by': 'Docker Container',
+                'docker_info': {
+                    'is_docker': os.path.exists('/.dockerenv'),
+                    'python_version': sys.version,
+                    'working_directory': os.getcwd()
+                },
                 'filters_applied': {
                     'status': status_filter,
                     'limit': limit
@@ -603,16 +694,58 @@ def generate_docx():
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'message': f'Internal server error: {str(e)}'
+            'message': f'Internal server error: {str(e)}',
+            'docker_info': {
+                'is_docker': os.path.exists('/.dockerenv'),
+                'python_version': sys.version
+            }
         }), 500
 
 @app.route('/runtime')
 def runtime():
-    import os
-    return {
-        "is_docker": os.path.exists('/.dockerenv'),
-        "process": os.popen('ps aux').read()
-    }
+    """Enhanced runtime information endpoint"""
+    log_with_timestamp("📊 Runtime information requested")
+    try:
+        import os
+        import subprocess
+        
+        # Get process information safely
+        try:
+            process_info = subprocess.check_output(['ps', 'aux'], text=True)
+        except:
+            process_info = "Process list unavailable"
+        
+        # Get Docker info
+        docker_env_exists = os.path.exists('/.dockerenv')
+        
+        # Get environment variables
+        env_vars = {
+            'PORT': os.environ.get('PORT', 'Not set'),
+            'PYTHONUNBUFFERED': os.environ.get('PYTHONUNBUFFERED', 'Not set'),
+            'GOOGLE_CLOUD_PROJECT': os.environ.get('GOOGLE_CLOUD_PROJECT', 'Not set'),
+            'PWD': os.environ.get('PWD', 'Not set')
+        }
+        
+        return jsonify({
+            "is_docker": docker_env_exists,
+            "process": process_info[:1000],  # Limit output
+            "python_version": sys.version,
+            "working_directory": os.getcwd(),
+            "environment_variables": env_vars,
+            "firestore_initialized": db is not None,
+            "storage_initialized": bucket is not None,
+            "uptime": "Container is running"
+        })
+    except Exception as e:
+        log_with_timestamp(f"❌ Error getting runtime info: {str(e)}")
+        return jsonify({
+            "is_docker": os.path.exists('/.dockerenv'),
+            "process": f"Error: {str(e)}",
+            "error": str(e)
+        })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)
+    log_with_timestamp("🎯 Starting Flask application")
+    port = int(os.environ.get('PORT', 8080))
+    log_with_timestamp(f"🌐 Flask will run on port: {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
