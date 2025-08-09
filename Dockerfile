@@ -1,24 +1,27 @@
-# Use the official Python image
+# Use official Python image
 FROM python:3.9-slim
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ENV PORT 8080
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libjpeg-dev \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set work directory
-WORKDIR /app 
-# Create a virtual environment
+WORKDIR /app
 
-# Copy requirements first to leverage Docker cache
+# Copy requirements
 COPY requirements.txt .
- # This allows Docker to cache the layer with dependencies
 
-# Install dependencies
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
+# Copy application code
 COPY . .
 
-# Run the web service on container startup
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 main:app
+# Set environment variables
+ENV PORT=8080
+ENV PYTHONUNBUFFERED=TRUE
+
+# Run Gunicorn (production server)
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "0", "main:app"]
