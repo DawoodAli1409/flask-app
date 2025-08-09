@@ -606,5 +606,13 @@ def generate_docx():
             'message': f'Internal server error: {str(e)}'
         }), 500
 
+@app.route('/runtime')
+def runtime():
+    import os
+    return {
+        "is_docker": os.path.exists('/.dockerenv'),
+        "process": os.popen('ps aux').read()
+    }
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)
