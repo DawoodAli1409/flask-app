@@ -439,7 +439,7 @@ def create_professional_docx(projects_data):
     
     return doc
 
-def fetch_all_projects(status_filter=None, limit=100):
+def fetch_all_projects(status_filter=None, limit=None):
     """Fetch all projects from Firestore with robust student data handling"""
     try:
         log_with_timestamp(f"🔍 Fetching projects from database")
